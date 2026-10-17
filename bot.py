@@ -102,7 +102,10 @@ from voice_store import VoiceStore
 from activity_store import ActivityStore
 import twilio_sig  # X-Twilio-Signature verification (T1; stdlib-only)
 from latency_observer import LatencyObserver  # pure-observation latency (T1/T2)
-from voice_agent.app import ReadinessState
+from voice_agent.app import ApplicationSettings, ReadinessState
+from voice_agent.engines.nova_sonic import NovaSonicEngineConfig, NovaSonicSessionEngine
+from voice_agent.transports.connect_a2a import ConnectA2AAdapter, ConnectA2ASession
+from voice_agent.transports.connect_a2a_asgi import handle_connect_a2a_websocket
 
 load_dotenv(override=True)
 
@@ -2301,6 +2304,77 @@ async def _build_nova_sonic_pipeline(
     return task
 
 
+async def _build_connect_a2a_nova_engine(session: ConnectA2ASession) -> NovaSonicSessionEngine:
+    """Resolve the existing phone persona into a Connect-safe Nova engine.
+
+    The external A2A path intentionally enables only MCP tools that it
+    registers itself. Legacy phone call-control schemas require a PipelineTask
+    callback contract and are therefore not advertised on this new path.
+    """
+    defaults = RUNTIME_CONFIG.get_phone_defaults()
+    if defaults.get("engine", DEFAULT_ENGINE) != "nova-sonic":
+        raise RuntimeError("Amazon Connect A2A requires PHONE_ENGINE=nova-sonic")
+
+    lang_key = defaults.get("lang", DEFAULT_LANG)
+    scenario_key = defaults.get("scenario", DEFAULT_SCENARIO)
+    voice_key = defaults.get("voice", DEFAULT_NOVA_SONIC_VOICE)
+    voice = NOVA_SONIC_VOICE_ALIASES.get(voice_key, voice_key)
+    if voice not in voices_for("nova-sonic"):
+        voice = DEFAULT_NOVA_SONIC_VOICE
+    system_prompt, greeting = _resolve_system_greeting(
+        lang_key,
+        scenario_key,
+        None,
+        None,
+        tool_defs=[],
+    )
+
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    credentials = boto3.Session(region_name=region).get_credentials()
+    if credentials is None:
+        raise RuntimeError("AWS credentials are unavailable")
+    frozen = credentials.get_frozen_credentials()
+
+    mcp_clients: list[object] = []
+    try:
+        mcp_clients, mcp_schemas = await _connect_mcp_clients(scenario_key, "phone")
+        tools_schema, kept_mcp = _merge_mcp_tools(None, mcp_schemas)
+        mcp_functions = tuple(
+            (
+                function_schema.name,
+                with_filler(
+                    _nova_mcp_tool_wrapper(client),
+                    function_schema.name,
+                    lang_key,
+                ),
+            )
+            for client, function_schema in kept_mcp
+        )
+        return NovaSonicSessionEngine(
+            NovaSonicEngineConfig(
+                region=region,
+                access_key_id=frozen.access_key,
+                secret_access_key=frozen.secret_key,
+                session_token=frozen.token,
+                voice=voice,
+                system_instruction=system_prompt,
+                greeting=greeting,
+                input_format=session.input_format,
+                output_format=session.output_format,
+                tools=tools_schema,
+                seed_messages=tuple(_kb_seed_messages(scenario_key, lang_key) or ()),
+                vad_analyzer=_make_vad_analyzer(is_phone=True),
+                mcp_clients=tuple(mcp_clients),
+                mcp_functions=mcp_functions,
+            )
+        )
+    except Exception:
+        for client in mcp_clients:
+            with contextlib.suppress(Exception):
+                await client.close()
+        raise
+
+
 async def _build_pipeline(
     websocket: WebSocket,
     lang_key: str,
@@ -2667,6 +2741,11 @@ app = FastAPI()
 APP_READINESS = ReadinessState(
     os.environ.get("SERVICE_NAME", "voice-agent-ac").strip() or "voice-agent-ac"
 )
+APPLICATION_SETTINGS = ApplicationSettings.from_env()
+CONNECT_A2A_ADAPTER = ConnectA2AAdapter(
+    api_key=APPLICATION_SETTINGS.connect_a2a_api_key,
+    readiness=APP_READINESS,
+)
 
 
 @app.get("/health/live", include_in_schema=False)
@@ -2683,6 +2762,16 @@ async def health_ready() -> Response:
         content=json.dumps(payload),
         status_code=200 if payload["ok"] else 503,
         media_type="application/json",
+    )
+
+
+@app.websocket("/connect/a2a")
+async def connect_a2a_websocket_endpoint(websocket: WebSocket) -> None:
+    """Amazon Connect external A2A voice collaborator endpoint."""
+    await handle_connect_a2a_websocket(
+        websocket,
+        adapter=CONNECT_A2A_ADAPTER,
+        engine_factory=_build_connect_a2a_nova_engine,
     )
 
 

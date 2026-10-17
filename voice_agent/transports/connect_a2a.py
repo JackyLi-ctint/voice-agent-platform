@@ -1128,13 +1128,12 @@ class ConnectA2AAdapter:
     def extension_response_headers(self) -> dict[str, str]:
         return {EXTENSION_HEADER: EXTENSION_URI}
 
-    async def initialize(
-        self,
-        *,
-        headers: Mapping[str, str],
-        raw_request: str | bytes | Mapping[str, object],
-        send: SendEnvelope,
-    ) -> tuple[ConnectA2ASession, dict[str, object]]:
+    def parse_request(self, raw_request: str | bytes | Mapping[str, object]) -> ConnectA2ARequest:
+        """Parse one inbound JSON-RPC frame for the ASGI bridge."""
+        return self._codec.parse_request(raw_request)
+
+    def validate_handshake_headers(self, headers: Mapping[str, str]) -> None:
+        """Validate credentials, extension negotiation, and readiness pre-upgrade."""
         if not validate_bearer_authorization(_header(headers, "authorization"), self._api_key):
             raise ConnectA2AAuthenticationError("invalid bearer token")
         extensions = _header(headers, EXTENSION_HEADER)
@@ -1142,6 +1141,15 @@ class ConnectA2AAdapter:
             raise ConnectA2AProtocolError("required A2A extension was not requested")
         if not self._readiness.snapshot()["ok"]:
             raise ConnectA2ANotReadyError("service is not ready")
+
+    async def initialize(
+        self,
+        *,
+        headers: Mapping[str, str],
+        raw_request: str | bytes | Mapping[str, object],
+        send: SendEnvelope,
+    ) -> tuple[ConnectA2ASession, dict[str, object]]:
+        self.validate_handshake_headers(headers)
         request = self._codec.parse_request(raw_request)
         init = self._codec.parse_init(request)
         input_audio = _negotiate(init.input_audio, preferred_rate=16000)
