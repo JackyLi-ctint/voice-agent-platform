@@ -59,4 +59,3 @@ The custom Polly service uses the `aiobotocore` session supplied by Pipecat's AW
 MCP support is supplied by Pipecat's `mcp` extra; do not pin an older standalone MCP package alongside it.
 
 The image installs `requirements-dev.lock`, the tested transitive dependency graph. `requirements-dev.txt` remains the human-maintained direct dependency manifest. After changing it, build a candidate image, run the full suite, then regenerate the lock from that tested container before committing both files.
-
