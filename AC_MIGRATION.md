@@ -1,0 +1,39 @@
+# Voice Agent for Amazon Connect
+
+Clean target workspace for migrating the existing voice-agent platform from Amazon Chime SDK Voice Connector/SIP/RTP to Amazon Connect external Agent-to-Agent (A2A) bidirectional audio.
+
+## Target path
+
+```text
+PSTN caller
+  -> Amazon Connect phone number and contact flow
+  -> Connect AI agent, immediate handoff
+  -> external A2A audio over secure WebSocket
+  -> Pipecat voice-agent core
+  -> A2A audio back through Connect
+  -> caller
+```
+
+## Decisions
+
+- A2A WebSocket is the real-time conversational transport.
+- Kinesis Video Streams is not part of the base architecture.
+- KVS may be added later as an independent observation plane only for an approved raw-audio analytics or archival requirement.
+- Reuse the existing scenarios, tools, Nova Sonic and staged pipelines, history, monitoring, and admin concepts.
+- Do not migrate Chime provisioning, SIP/SDP/RTP, G.711 handling, fixed UDP ports, or the Node voice server.
+- Keep the existing `../voice-agent-platform` project unchanged as the comparison and rollback baseline during migration.
+
+## Workspace map
+
+- [`docs/architecture.md`](docs/architecture.md) — target boundaries and KVS decision.
+- [`docs/implementation-plan.md`](docs/implementation-plan.md) — phased delivery and acceptance gates.
+- [`src/README.md`](src/README.md) — intended application module boundaries.
+- [`infra/README.md`](infra/README.md) — intended Connect and runtime infrastructure.
+
+## Current status
+
+Architecture scaffold only. No application or infrastructure implementation has been copied yet.
+
+## First implementation milestone
+
+Build a transport-independent Pipecat session core and a protocol-level A2A endpoint proof of concept while preserving the old project as a behavioral reference. The first end-to-end gate is one inbound Connect test call that supports bidirectional audio, barge-in, normal completion, and human escalation.
