@@ -792,7 +792,7 @@ class ConnectA2ASession:
                 reason = "remote_interruption"
                 if isinstance(data, Mapping) and isinstance(data.get("reason"), str):
                     reason = data["reason"]
-                await self._interrupt(reason, notify_connect=False)
+                await self._flush_output_turn_locked(reason, notify_connect=False)
                 return self.codec.rpc_ack(request.request_id)
             if request.event_type == "ERROR":
                 await self._emit_event(SessionEvent("a2a_remote_error", time.monotonic()))
@@ -800,11 +800,20 @@ class ConnectA2ASession:
             raise ConnectA2AProtocolError(f"unsupported A2A event {request.event_type}")
 
     async def signal_local_interruption(self, reason: str = "user_speech") -> None:
-        """Flush Connect playback after local VAD detects barge-in."""
+        """Flush Connect playback after local VAD without ending the engine."""
+        await self.flush_output_turn(reason)
+
+    async def flush_output_turn(
+        self,
+        reason: str = "user_speech",
+        *,
+        notify_connect: bool = True,
+    ) -> None:
+        """Flush one active response without cancelling the persistent engine."""
         async with self._state_lock:
             if self.terminal or self.transport_lost:
                 return
-            await self._interrupt(reason, notify_connect=True)
+            await self._flush_output_turn_locked(reason, notify_connect=notify_connect)
 
     async def _interrupt(self, reason: str, *, notify_connect: bool) -> None:
         old_generation = self.generation
@@ -812,6 +821,9 @@ class ConnectA2ASession:
         task = self._engine_tasks.get(old_generation)
         if task and task is not asyncio.current_task() and not task.done():
             task.cancel()
+        await self._flush_output_turn_locked(reason, notify_connect=notify_connect)
+
+    async def _flush_output_turn_locked(self, reason: str, *, notify_connect: bool) -> None:
         task_id = await self.output.interrupt(reason)
         # TASK_STATE_CANCELED ends collaboration in Connect. A normal completed
         # status closes only the interrupted turn, allowing a fresh artifact on
@@ -1283,8 +1295,9 @@ class _GenerationBoundOutputSink:
             await self._output.write(chunk)
 
     async def interrupt(self, reason: str) -> None:
-        if self._session._owns_generation(self._generation, self._output):
-            await self._output.interrupt(reason)
+        async with self._session._state_lock:
+            if self._session._owns_generation(self._generation, self._output):
+                await self._session._flush_output_turn_locked(reason, notify_connect=True)
 
     async def aclose(self) -> None:
         async with self._session._state_lock:

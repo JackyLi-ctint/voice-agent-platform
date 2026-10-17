@@ -279,11 +279,13 @@ async def test_interruption_closes_turn_without_last_chunk_and_notifies_connect(
     )
     await session.handle_request(adapter._codec.parse_request(ready))
     fmt = AudioFormat(sample_rate_hz=24000)
+    generation_before_barge_in = session.generation
     await session.output.write(AudioChunk(b"\x01\x00", fmt, 0))
     await session.output.write(AudioChunk(b"\x02\x00", fmt, 1))
 
     await session.signal_local_interruption("barge_in")
 
+    assert session.generation == generation_before_barge_in
     assert sender.frames[0]["result"]["artifactUpdate"]["lastChunk"] is False
     assert sender.frames[1]["result"]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
     interruption = sender.frames[2]["result"]["message"]
@@ -297,6 +299,34 @@ async def test_interruption_closes_turn_without_last_chunk_and_notifies_connect(
     next_artifact = sender.frames[3]["result"]["artifactUpdate"]
     assert next_artifact["append"] is False and next_artifact["lastChunk"] is True
     assert next_artifact["taskId"] != sender.frames[0]["result"]["artifactUpdate"]["taskId"]
+
+
+@pytest.mark.asyncio
+async def test_remote_interruption_flushes_output_without_echoing_connect_interruption():
+    ids = _Ids()
+    adapter = ConnectA2AAdapter(api_key=SecretValue("api-key"), readiness=_ready_state(), id_factory=ids)
+    sender = _Sender()
+    session, _ = await adapter.initialize(headers=_headers(), raw_request=_init_request(), send=sender.send)
+    ready = _request(
+        request_id="ready-1",
+        context_id="context-1",
+        event_type="CHANNEL_STATE",
+        part={"data": {"channelState": {"state": "READY"}}, "mediaType": "application/json"},
+    )
+    await session.handle_request(adapter._codec.parse_request(ready))
+    await session.output.write(AudioChunk(b"\x01\x00", AudioFormat(sample_rate_hz=24000), 0))
+    await session.output.write(AudioChunk(b"\x02\x00", AudioFormat(sample_rate_hz=24000), 1))
+    interruption = _request(
+        request_id="interrupt-1",
+        context_id="context-1",
+        event_type="INTERRUPTION",
+        part={"data": {"interruption": {"reason": "caller_barge_in"}}, "mediaType": "application/json"},
+    )
+
+    await session.handle_request(adapter._codec.parse_request(interruption))
+
+    assert sender.frames[-1]["result"]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert not any("message" in frame["result"] for frame in sender.frames)
 
 
 @pytest.mark.asyncio
@@ -489,6 +519,25 @@ class _BlockingEngine:
             raise
 
 
+class _PersistentEngine:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.resume = asyncio.Event()
+        self.wrote_after_barge_in = asyncio.Event()
+
+    async def run(self, context: SessionContext) -> EngineResult:
+        fmt = AudioFormat(sample_rate_hz=24000)
+        await context.ports.outbound_audio.write(AudioChunk(b"\x01\x00", fmt, 0))
+        await context.ports.outbound_audio.write(AudioChunk(b"\x02\x00", fmt, 1))
+        self.started.set()
+        await self.resume.wait()
+        await context.ports.outbound_audio.write(AudioChunk(b"\x03\x00", fmt, 2))
+        await context.ports.outbound_audio.write(AudioChunk(b"\x04\x00", fmt, 3))
+        self.wrote_after_barge_in.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
 class _WaitingEngine:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -533,7 +582,7 @@ async def test_rebind_fences_canceled_old_engine_from_new_attempt():
 
 
 @pytest.mark.asyncio
-async def test_local_barge_in_fences_stale_engine_output_and_limits_frame_bytes():
+async def test_local_barge_in_keeps_engine_running_and_limits_frame_bytes():
     ids = _Ids()
     adapter = ConnectA2AAdapter(
         api_key=SecretValue("api-key"),
@@ -550,15 +599,18 @@ async def test_local_barge_in_fences_stale_engine_output_and_limits_frame_bytes(
         part={"data": {"channelState": {"state": "READY"}}, "mediaType": "application/json"},
     )
     await session.handle_request(adapter._codec.parse_request(ready))
-    engine = _BlockingEngine()
+    engine = _PersistentEngine()
     task = asyncio.create_task(session.run_engine(engine))
     await engine.started.wait()
+    generation_before_barge_in = session.generation
+
     await session.signal_local_interruption("barge_in")
-    engine.release_after_cancel.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert engine.stale_write_rejected is True
-    assert len([f for f in sender.frames if "artifactUpdate" in f["result"]]) == 1
+
+    assert session.generation == generation_before_barge_in
+    assert not task.done()
+    engine.resume.set()
+    await engine.wrote_after_barge_in.wait()
+    assert len([frame for frame in sender.frames if "artifactUpdate" in frame["result"]]) == 2
 
     oversized = _request(
         request_id="audio-big", context_id="context-1", event_type=None,
@@ -566,6 +618,10 @@ async def test_local_barge_in_fences_stale_engine_output_and_limits_frame_bytes(
     )
     with pytest.raises(ConnectA2AOverloadError):
         await session.handle_request(adapter._codec.parse_request(oversized))
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 class _YieldingSender(_Sender):
@@ -581,7 +637,7 @@ class _YieldingSender(_Sender):
 
 
 @pytest.mark.asyncio
-async def test_interruption_serializes_with_inflight_sender_and_fences_followup_output():
+async def test_interruption_serializes_with_inflight_sender_and_keeps_output_port_live():
     ids = _Ids()
     adapter = ConnectA2AAdapter(api_key=SecretValue("api-key"), readiness=_ready_state(), id_factory=ids)
     sender = _YieldingSender()
@@ -605,10 +661,12 @@ async def test_interruption_serializes_with_inflight_sender_and_fences_followup_
     await second
     await interruption
 
-    with pytest.raises(ConnectA2AConflictError):
-        # The output sink remains available for a deliberate new turn, but the
-        # stale generation-bound port from the producer cannot write after VAD.
-        await stale.write(AudioChunk(b"\x03\x00", fmt, 2))
+    assert session.generation == 0
+    # The same engine-owned output port starts a fresh artifact after the
+    # non-terminal flush; a local VAD interruption must not fence it out.
+    await stale.write(AudioChunk(b"\x03\x00", fmt, 2))
+    await stale.write(AudioChunk(b"\x04\x00", fmt, 3))
+    assert sender.frames[-1]["result"]["artifactUpdate"]["append"] is False
 
 
 @pytest.mark.asyncio
@@ -638,3 +696,67 @@ async def test_audio_byte_budgets_cover_pending_and_output_frames():
         await session.handle_request(adapter._codec.parse_request(audio))
     with pytest.raises(ConnectA2AOverloadError):
         await session.output.write(AudioChunk(b"\x01\x00\x02\x00", AudioFormat(sample_rate_hz=24000), 0))
+
+
+@pytest.mark.asyncio
+async def test_pipecat_interruption_flushes_one_connect_turn_and_preserves_generation(monkeypatch):
+    """Exercise the real output-transport-to-Connect interruption boundary."""
+    from pipecat.frames.frames import InterruptionFrame, OutputAudioRawFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.transports.base_output import BaseOutputTransport
+
+    from voice_agent.pipecat.ports_transport import SessionPortsTransport
+    from voice_agent.session.contracts import SessionPorts
+
+    async def ignore_downstream_processing(self, frame, direction):
+        return None
+
+    monkeypatch.setattr(BaseOutputTransport, "process_frame", ignore_downstream_processing)
+    ids = _Ids()
+    adapter = ConnectA2AAdapter(api_key=SecretValue("api-key"), readiness=_ready_state(), id_factory=ids)
+    sender = _Sender()
+    session, _ = await adapter.initialize(headers=_headers(), raw_request=_init_request(), send=sender.send)
+    ready = _request(
+        request_id="ready-1",
+        context_id="context-1",
+        event_type="CHANNEL_STATE",
+        part={"data": {"channelState": {"state": "READY"}}, "mediaType": "application/json"},
+    )
+    await session.handle_request(adapter._codec.parse_request(ready))
+    ports = SessionPorts(
+        inbound_audio=session.source,
+        outbound_audio=_GenerationBoundOutputSink(session, session.generation, session.output),
+        events=session.events,
+        lifecycle=session.lifecycle,
+        traces=session.traces,
+    )
+    transport = SessionPortsTransport(
+        ports=ports,
+        input_format=session.input_format,
+        output_format=session.output_format,
+    )
+    generation_before_barge_in = session.generation
+
+    await transport.output().write_audio_frame(
+        OutputAudioRawFrame(audio=b"\x01\x00", sample_rate=24000, num_channels=1)
+    )
+    await transport.output().write_audio_frame(
+        OutputAudioRawFrame(audio=b"\x02\x00", sample_rate=24000, num_channels=1)
+    )
+    await transport.output().process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
+
+    statuses = [frame["result"]["statusUpdate"] for frame in sender.frames if "statusUpdate" in frame["result"]]
+    interruptions = [frame["result"]["message"] for frame in sender.frames if "message" in frame["result"]]
+    assert session.generation == generation_before_barge_in
+    assert [status["status"]["state"] for status in statuses] == ["TASK_STATE_COMPLETED"]
+    assert len(interruptions) == 1
+
+    await transport.output().write_audio_frame(
+        OutputAudioRawFrame(audio=b"\x03\x00", sample_rate=24000, num_channels=1)
+    )
+    await transport.output().write_audio_frame(
+        OutputAudioRawFrame(audio=b"\x04\x00", sample_rate=24000, num_channels=1)
+    )
+    artifacts = [frame["result"]["artifactUpdate"] for frame in sender.frames if "artifactUpdate" in frame["result"]]
+    assert len(artifacts) == 2
+    assert artifacts[-1]["append"] is False
