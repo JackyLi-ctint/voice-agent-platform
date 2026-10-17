@@ -27,7 +27,7 @@ PSTN caller
 
 - [`docs/architecture.md`](docs/architecture.md) — target boundaries and KVS decision.
 - [`docs/implementation-plan.md`](docs/implementation-plan.md) — phased delivery and acceptance gates.
-- [`src/README.md`](src/README.md) — intended application module boundaries.
+- [`voice_agent/README.md`](voice_agent/README.md) — implemented Phase 1 application boundaries.
 - [`infra/README.md`](infra/README.md) — intended Connect and runtime infrastructure.
 
 ## Current status

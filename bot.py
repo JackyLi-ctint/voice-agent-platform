@@ -101,6 +101,7 @@ from voice_store import VoiceStore
 from activity_store import ActivityStore
 import twilio_sig  # X-Twilio-Signature verification (T1; stdlib-only)
 from latency_observer import LatencyObserver  # pure-observation latency (T1/T2)
+from voice_agent.app import ReadinessState
 
 load_dotenv(override=True)
 
@@ -2662,6 +2663,28 @@ async def _build_pipeline(
 
 
 app = FastAPI()
+APP_READINESS = ReadinessState(
+    os.environ.get("SERVICE_NAME", "voice-agent-ac").strip() or "voice-agent-ac"
+)
+
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live() -> dict[str, object]:
+    """Unauthenticated process liveness for load balancers and supervisors."""
+    return APP_READINESS.liveness()
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready() -> Response:
+    """Unauthenticated cached startup readiness; performs no network probes."""
+    payload = APP_READINESS.snapshot()
+    return Response(
+        content=json.dumps(payload),
+        status_code=200 if payload["ok"] else 503,
+        media_type="application/json",
+    )
+
+
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 
@@ -7327,39 +7350,85 @@ async def monitor_ws_endpoint(websocket: WebSocket) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Prewarm the DDB-backed demo cache so the first call doesn't pay a scan
-    # and get()/list() serve from memory. rescan() degrades gracefully (logs +
-    # keeps the empty cache) if the table is missing / DDB is unreachable, so a
-    # DDB hiccup at startup never blocks boot — get()->None, list()->[] until a
-    # later rescan succeeds.
+    APP_READINESS.begin_startup()
+    APP_READINESS.set_check(
+        "session_foundation",
+        ok=True,
+        critical=True,
+        detail="transport-independent contracts available",
+    )
+
+    # Runtime config is critical for accepting a session. Snapshot both segments
+    # once during startup without performing any external network call.
+    try:
+        RUNTIME_CONFIG.get_web_defaults()
+        RUNTIME_CONFIG.get_phone_defaults()
+        APP_READINESS.set_check(
+            "runtime_config", ok=True, critical=True, detail="defaults loaded"
+        )
+    except Exception as e:
+        APP_READINESS.set_check(
+            "runtime_config", ok=False, critical=True, detail=type(e).__name__
+        )
+        logger.exception("lifespan: runtime config initialization failed")
+
+    # Prewarm the DDB-backed demo cache so the first call doesn't pay a scan.
+    # This remains optional: the store already degrades to an empty cache.
     try:
         n = await DEMO_LOADER.rescan()
+        skipped = len(DEMO_LOADER.last_skipped)
+        APP_READINESS.set_check(
+            "demo_store",
+            ok=skipped == 0,
+            critical=False,
+            detail=f"{n} demos cached; {skipped} skipped",
+        )
         logger.info(f"lifespan: prewarmed demo cache ({n} demos)")
     except Exception as e:  # pragma: no cover — rescan already degrades internally
+        APP_READINESS.set_check(
+            "demo_store", ok=False, critical=False, detail=type(e).__name__
+        )
         logger.warning(f"lifespan: demo cache prewarm failed (continuing): {e}")
 
-    # Prewarm + one-time seed of the voice registry. seed_if_empty rescans
-    # first (establishing liveness), writes the in-code constants ONLY when the
-    # live table is reachable AND empty, then rescans again. Table missing ->
-    # no-op + NOT live, so voices_for() keeps returning the in-code constants
-    # (zero-impact ship). Degrades internally; never blocks boot.
+    # Prewarm + one-time seed of the optional voice registry. If its table is
+    # unavailable the in-code registry remains usable and readiness is degraded,
+    # not failed.
     try:
         seeded = await VOICE_STORE.seed_if_empty(_VOICE_CONSTANTS)
+        APP_READINESS.set_check(
+            "voice_store",
+            ok=bool(VOICE_STORE.live),
+            critical=False,
+            detail=(
+                f"live={VOICE_STORE.live} seeded={seeded} "
+                f"voices={sum(len(v) for v in VOICE_STORE.list().values())}"
+            ),
+        )
         logger.info(
             f"lifespan: voice registry live={VOICE_STORE.live} seeded={seeded} "
             f"({sum(len(v) for v in VOICE_STORE.list().values())} voices)"
         )
     except Exception as e:  # pragma: no cover — seed/rescan degrade internally
+        APP_READINESS.set_check(
+            "voice_store", ok=False, critical=False, detail=type(e).__name__
+        )
         logger.warning(f"lifespan: voice registry prewarm failed (continuing): {e}")
 
     # Activity audit store needs no prewarm (no cache) — it is a best-effort
-    # write path with a lazy table. Just announce its config; the table may not
-    # exist yet (zero-impact: log() no-ops, GET /api/admin/activity → empty).
+    # write path with a lazy table.
+    APP_READINESS.set_check(
+        "activity_store", ok=True, critical=False, detail="lazy best-effort store"
+    )
     logger.info(
         f"lifespan: activity store ready (table={ACTIVITY_STORE._table_name!r} "
         f"ttl_days={ACTIVITY_STORE._ttl_days})"
     )
-    yield
+
+    APP_READINESS.mark_started()
+    try:
+        yield
+    finally:
+        APP_READINESS.mark_stopping()
 
 
 # Attach the lifespan to the already-constructed `app` (created at import time,

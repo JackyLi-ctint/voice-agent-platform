@@ -21,13 +21,13 @@ Exit gate: a test number reaches a basic flow and the target account supports th
 
 ## Phase 1 — establish the application skeleton
 
-- [ ] Select and pin the Python/runtime dependency versions.
-- [ ] Define configuration and secret-loading conventions.
-- [ ] Define transport-independent audio, event, lifecycle, and tracing interfaces.
-- [ ] Define stable session identity using Connect context/contact identifiers.
-- [ ] Add health, readiness, structured logging, and local development entry points.
+- [ ] Select and pin the Python/runtime dependency versions. Deferred until a known-good Pipecat environment can be captured; the current workstation does not have `pipecat-ai` or `pytest` installed.
+- [x] Define configuration and secret-loading conventions.
+- [x] Define transport-independent audio, event, lifecycle, and tracing interfaces.
+- [x] Define stable session identity using Connect context/contact identifiers.
+- [x] Add health, readiness, structured logging, and local development entry points.
 
-Exit gate: the service starts locally and a fake transport can run a deterministic session lifecycle.
+Exit gate: the deterministic in-memory session passes. Full service startup remains pending dependency restoration and the existing regression suite.
 
 ## Phase 2 — migrate reusable voice-agent behavior
 
