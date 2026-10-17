@@ -1,0 +1,27 @@
+name: voice-agent-ac
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    working_dir: /workspace
+    user: vscode
+    environment:
+      PYTHONPATH: /workspace
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+    volumes:
+      - .:/workspace
+      # Hide a developer's host .env: bot.py uses load_dotenv(override=True),
+      # so the tracked empty file preserves dummy Compose credentials in tests.
+      - ./.docker/compose.env:/workspace/.env:ro
+    init: true
+    stdin_open: true
+    tty: true
+    command: ["sleep", "infinity"]

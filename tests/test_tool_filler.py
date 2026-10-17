@@ -246,6 +246,7 @@ class _DriverLLMService(LLMService):
                 arguments={},
                 llm=self,  # REAL in-pipeline LLMService — push_frame not mocked
                 context=LLMContext(),
+                pipeline_worker=None,
                 result_callback=AsyncMock(),
             )
             await wrapped(params)

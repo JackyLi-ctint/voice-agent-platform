@@ -21,13 +21,13 @@ Exit gate: a test number reaches a basic flow and the target account supports th
 
 ## Phase 1 — establish the application skeleton
 
-- [ ] Select and pin the Python/runtime dependency versions. Deferred until a known-good Pipecat environment can be captured; the current workstation does not have `pipecat-ai` or `pytest` installed.
+- [x] Select and pin direct Python/runtime dependency versions. `requirements-dev.txt` and the tested Linux/Python 3.12 transitive lock in `requirements-dev.lock` are validated by the Compose suite; production deployment migration remains a later infrastructure task.
 - [x] Define configuration and secret-loading conventions.
 - [x] Define transport-independent audio, event, lifecycle, and tracing interfaces.
 - [x] Define stable session identity using Connect context/contact identifiers.
 - [x] Add health, readiness, structured logging, and local development entry points.
 
-Exit gate: the deterministic in-memory session passes. Full service startup remains pending dependency restoration and the existing regression suite.
+Exit gate: the deterministic in-memory session and the complete Python suite pass in Docker Compose. Full service startup with live AWS credentials remains a separate integration check.
 
 ## Phase 2 — migrate reusable voice-agent behavior
 

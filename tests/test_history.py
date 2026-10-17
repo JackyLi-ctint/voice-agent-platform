@@ -4,8 +4,8 @@ Uses moto[dynamodb] to mock the table; the real bot.py module is loaded
 with HISTORY_TABLE set to a moto-managed table name.
 
 Verifies:
-  - finalize() writes a row with ttl, turn_count, summary_status='pending'
-    and the buffered turns.
+  - flush_turns_and_summarize() writes a row with ttl, turn_count,
+    summary_status='pending', and the buffered turns.
   - The follow-up _summarize_and_update task overwrites summary_status to
     'ok' and stores summary.model + summary.generated_at.
   - On Bedrock failure the row's summary_status flips to 'failed'.
@@ -136,8 +136,8 @@ def test_finalize_writes_pending_then_ok(aws_creds, monkeypatch):
         bot._history.append(call_id, {"who": "bot", "text": "hi there", "t": 1.2})
 
         async def run():
-            await bot._history.finalize(call_id)
-            # finalize() spawned the summary task; let it run to completion.
+            await bot._history.flush_turns_and_summarize(call_id)
+            # The flush schedules the summary task; let it run to completion.
             for t in asyncio.all_tasks() - {asyncio.current_task()}:
                 await t
 
@@ -192,7 +192,7 @@ def test_finalize_failed_summary_marks_status(aws_creds, monkeypatch):
         bot._history.append(call_id, {"who": "user", "text": "hi", "t": 0.1})
 
         async def run():
-            await bot._history.finalize(call_id)
+            await bot._history.flush_turns_and_summarize(call_id)
             for t in asyncio.all_tasks() - {asyncio.current_task()}:
                 await t
 

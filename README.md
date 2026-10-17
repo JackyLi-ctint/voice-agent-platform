@@ -100,6 +100,18 @@ PUBLIC_IP=<EC2_PUBLIC_IP> RTP_PORT_BASE=10000 RTP_PORT_COUNT=1000 \
 
 打开浏览器访问 `http://<host>:7860/`。如果设置了 `SITE_PASSWORD`，会弹出 Basic Auth 提示。
 
+## Docker Compose 开发 / Docker Compose development
+
+当 Kiro 不能使用 Dev Containers 插件时，用 Docker Compose 运行 Linux + Python 3.12 测试环境：
+
+```powershell
+docker compose build app
+docker compose run --rm app python -m voice_agent.dev.smoke
+docker compose run --rm app python -m pytest -q tests
+```
+
+完整前置条件、针对性回归命令、交互式 shell 和安全注意事项见 [`docs/docker-compose-development.md`](docs/docker-compose-development.md)。
+
 ## 云端部署（推荐）
 
 详细见 [`deploy/README.md`](deploy/README.md)。要点：

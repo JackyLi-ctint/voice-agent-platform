@@ -78,6 +78,7 @@ from pipecat.services.tts_service import TTSService
 from pipecat.services.settings import TTSSettings
 from pipecat.frames.frames import ErrorFrame, TTSAudioRawFrame
 from pipecat.utils.tracing.service_decorators import traced_tts
+from aiobotocore.session import get_session
 from asr_filter import (
     TranscriptHallucinationFilter,
     _env_bool,
@@ -781,7 +782,7 @@ class SimplePollyTTSService(TTSService):
             "aws_session_token": aws_session_token,
             "region_name": region,
         }
-        self._aws_session = aioboto3.Session()
+        self._aws_session = get_session()
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -790,7 +791,7 @@ class SimplePollyTTSService(TTSService):
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator:
         logger.debug(f"{self}: Polly synth [{text}]")
         try:
-            async with self._aws_session.client("polly", **self._aws_kwargs) as polly:
+            async with self._aws_session.create_client("polly", **self._aws_kwargs) as polly:
                 resp = await polly.synthesize_speech(
                     Text=text,
                     TextType="text",

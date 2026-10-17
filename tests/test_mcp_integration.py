@@ -226,6 +226,7 @@ async def test_merge_skips_conflicting_end_call_and_roundtrips(
             arguments={"city": "Tokyo"},
             llm=None,
             context=None,
+            pipeline_worker=None,
             result_callback=result_callback,
         )
         await client_for_weather._tool_wrapper(params)

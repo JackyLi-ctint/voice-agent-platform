@@ -1,0 +1,35 @@
+# Source-control and local editor state
+.git/
+.gitignore
+.vscode/
+.idea/
+.devcontainer/
+
+# Local Python and Node build artifacts
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+node_modules/
+**/node_modules/
+dist/
+build/
+
+# Secrets, mutable runtime state, and call artifacts
+.env
+.env.local
+*.pem
+*.key
+config/runtime.json
+config/mcp_servers.json
+*.log
+*.wav
+minimax_output.wav
+
+# Local agent/review output
+.chorus/
+.claude/
+semantic-review/

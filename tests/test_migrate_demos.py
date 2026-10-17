@@ -134,11 +134,9 @@ def _create_demos_table(region: str = "us-east-1") -> None:
     ddb.get_waiter("table_exists").wait(TableName=DEMOS_TABLE)
 
 
-CANONICAL_KEYS = {
-    "id", "label", "lang", "system", "greeting",
-    "kb_intro", "kb_ack", "kb_body", "tool_ids",
-    "mcp_servers", "filler", "tags",
-}
+CANONICAL_KEYS = set(
+    normalize_demo_dict({"id": "schema"}, validate_tools=False).keys()
+)
 
 
 # ---------------------------------------------------------------------------

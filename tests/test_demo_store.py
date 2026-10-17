@@ -163,12 +163,11 @@ def test_put_get_list_roundtrip_with_tool_ids_and_decimal(ddb_env):
         assert "tool_ids" in demo
         assert "tools" not in demo
         assert demo["tool_ids"] == ["end_call"]
-        # Canonical key set (same as demo_loader.normalize_demo_dict output).
-        assert set(demo.keys()) == {
-            "id", "label", "lang", "system", "greeting",
-            "kb_intro", "kb_ack", "kb_body", "tool_ids",
-            "mcp_servers", "filler", "tags",
-        }
+        # Canonical key set remains aligned with DemoLoader's single shared
+        # normalizer, including later-added optional model/ASR fields.
+        assert set(demo.keys()) == set(
+            normalize_demo_dict(SAMPLE_DEMO, validate_tools=False).keys()
+        )
         # Per-lang maps survive.
         assert demo["system"]["zh-HK"] == "你係客服"
         assert demo["greeting"]["en-US"] == "hello"
