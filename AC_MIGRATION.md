@@ -32,8 +32,8 @@ PSTN caller
 
 ## Current status
 
-Architecture scaffold only. No application or infrastructure implementation has been copied yet.
+Phase 1 is implemented and validated in Docker Compose. The Amazon Connect A2A controller/codec is implemented and contract-tested, but no public A2A WebSocket route is mounted until the Pipecat engine is adapted to the transport-independent session ports and a real Connect test instance validates the integration.
 
-## First implementation milestone
+## Next implementation milestone
 
-Build a transport-independent Pipecat session core and a protocol-level A2A endpoint proof of concept while preserving the old project as a behavioral reference. The first end-to-end gate is one inbound Connect test call that supports bidirectional audio, barge-in, normal completion, and human escalation.
+Adapt one Pipecat engine (Nova Sonic first) to the transport-independent `SessionEngine`/`SessionPorts` core, then mount the authenticated A2A WebSocket bridge and validate it with an Amazon Connect test number.

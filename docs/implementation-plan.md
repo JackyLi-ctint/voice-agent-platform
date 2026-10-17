@@ -42,19 +42,20 @@ Exit gate: a local PCM fixture can drive a complete Nova Sonic session and produ
 
 ## Phase 3 — implement the Connect A2A adapter
 
-- [ ] Validate bearer credentials using constant-time comparison.
-- [ ] Implement initialization, response, and READY-state handling.
-- [ ] Implement PCM negotiation, initially 16 kHz input and 24 kHz output.
-- [ ] Stream inbound audio continuously to VAD/Pipecat.
-- [ ] Stream one correctly bounded outbound audio artifact per response.
-- [ ] Close every artifact and task to prevent playback underrun.
-- [ ] Emit interruption events and stop current application output on barge-in.
-- [ ] Emit required trace spans for input, output, and tools.
-- [ ] Implement `FINISH: COMPLETE` and `FINISH: ESCALATE`.
-- [ ] Handle one eligible reconnect idempotently by context ID.
-- [ ] Map failures to explicit A2A errors and safe close codes.
+- [x] Validate bearer credentials using constant-time comparison.
+- [x] Implement initialization, response, and READY-state handling in the transport controller.
+- [x] Implement PCM negotiation, initially 16/24 kHz preference with documented 8/16/24 kHz support.
+- [x] Map continuous base64 PCM input and one output artifact/task in the protocol controller.
+- [x] Close output artifacts and task state in the protocol controller.
+- [x] Emit interruption, terminal outcome, and session trace protocol frames in the controller.
+- [x] Implement `FINISH: COMPLETE` and `FINISH: ESCALATE` protocol frames.
+- [x] Handle one eligible reconnect idempotently by context ID in the controller.
+- [x] Map invalid controller state to typed protocol errors.
+- [ ] Map request failures to standard JSON-RPC ErrorInfo envelopes and WebSocket close codes in the future ASGI bridge.
 
-Exit gate: an A2A protocol harness can complete, interrupt, escalate, reconnect, and fail a session without leaked tasks.
+Deferred: mount the adapter as a public authenticated WebSocket endpoint only after the Pipecat engine is adapted to the transport-independent `SessionPorts` core. Fragmentation, DTMF, silence input, full per-turn tool/LLM OTLP propagation, request-error envelopes, and real Connect contract validation remain required before production use.
+
+Exit gate: a deterministic A2A protocol harness completes, interrupts, escalates, reconnects, and rejects invalid state without leaking task/artifact state.
 
 ## Phase 4 — configure Amazon Connect
 
